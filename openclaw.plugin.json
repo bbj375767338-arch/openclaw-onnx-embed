@@ -1,0 +1,14 @@
+{
+  "id": "openclaw-onnx-embed",
+  "enabledByDefault": true,
+  "contracts": {
+    "memoryEmbeddingProviders": [
+      "onnx-bge-local"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
