@@ -23,9 +23,18 @@ const DEFAULT_MODEL = 'bge-large-zh-v1.5';
 // ============================================================
 let subprocess = null;
 let pending = new Map();
-let subprocessReady = false;
-let initPromise = null;
 let idCounter = 0;
+let initPromise = null;
+
+function resetSubprocess() {
+  subprocess = null;
+  initPromise = null;
+  // Reject all pending
+  for (const [id, { resolve, reject }] of pending) {
+    reject(new Error('Subprocess restarted'));
+  }
+  pending.clear();
+}
 
 function initSubprocess() {
   if (initPromise) return initPromise;
@@ -47,22 +56,21 @@ function initSubprocess() {
         try {
           const msg = JSON.parse(line);
           if (msg.type === 'ready') {
-            subprocessReady = true;
             console.log('[onnx-bge] Subprocess ready!');
             resolve();
           } else if (msg.type === 'embedding') {
             const { id, result } = msg;
-            const resolve = pending.get(id);
-            if (resolve) {
-              resolve(result);
+            const p = pending.get(id);
+            if (p) {
+              p.resolve(result);
               pending.delete(id);
             }
           } else if (msg.type === 'error') {
             const { id, error } = msg;
             console.error('[onnx-bge] Subprocess error:', error);
-            const resolve = pending.get(id);
-            if (resolve) {
-              resolve(null);
+            const p = pending.get(id);
+            if (p) {
+              p.resolve(null);
               pending.delete(id);
             }
           }
@@ -73,53 +81,69 @@ function initSubprocess() {
     });
 
     subprocess.stderr.on('data', (chunk) => {
-      // Log subprocess stderr to main process logs
       process.stderr.write('[onnx-sub] ' + chunk.toString());
     });
 
     subprocess.on('error', (err) => {
       console.error('[onnx-bge] Subprocess error:', err.message);
-      subprocessReady = false;
+      resetSubprocess();
       reject(err);
     });
 
     subprocess.on('exit', (code) => {
       console.log('[onnx-bge] Subprocess exited with code:', code);
-      subprocessReady = false;
+      resetSubprocess();
     });
 
     // Timeout after 90 seconds for init
-    setTimeout(() => {
-      if (!subprocessReady) {
-        reject(new Error('Subprocess initialization timed out'));
+    const timeout = setTimeout(() => {
+      if (!subprocess || subprocess.exitCode !== null) {
+        return; // already exited
       }
+      console.error('[onnx-bge] Subprocess init timed out after 90s');
+      subprocess.kill();
+      resetSubprocess();
+      reject(new Error('Subprocess initialization timed out'));
     }, 90000);
+
+    // Clear timeout if subprocess succeeds
+    subprocess.once('ready', () => clearTimeout(timeout));
   });
   return initPromise;
 }
 
 function sendToSubprocess(msg) {
-  if (subprocess && subprocess.stdin && !subprocess.stdin.destroyed) {
-    subprocess.stdin.write(JSON.stringify(msg) + '\n');
+  if (!subprocess || subprocess.stdin.destroyed) {
+    return false;
   }
+  subprocess.stdin.write(JSON.stringify(msg) + '\n');
+  return true;
 }
 
 async function embedInSubprocess(text) {
+  // If subprocess died between calls, initPromise is now null (resetSubprocess was called)
   await initSubprocess();
 
   return new Promise((resolve, reject) => {
     const id = ++idCounter;
-    pending.set(id, resolve);
+    pending.set(id, { resolve, reject });
 
-    sendToSubprocess({ type: 'embed', id, text });
+    if (!sendToSubprocess({ type: 'embed', id, text })) {
+      pending.delete(id);
+      // Subprocess died concurrently - initSubprocess will reset and the next call will reinit
+      reject(new Error('Subprocess died during embedding'));
+      return;
+    }
 
-    // Timeout after 30 seconds per embedding
-    setTimeout(() => {
+    // Timeout after 60 seconds per embedding
+    const timeout = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
-        reject(new Error('Embedding timed out'));
+        reject(new Error('Embedding timed out after 60s'));
       }
-    }, 30000);
+    }, 60000);
+
+    pending.get(id)?.ref?.(); // keep promise alive (no-op in new Promise context)
   });
 }
 
