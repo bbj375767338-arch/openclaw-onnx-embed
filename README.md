@@ -1,28 +1,34 @@
 # openclaw-onnx-embed
 
-**Local ONNX-based BGE embedding provider for OpenClaw memory search.**
-
-Uses `bge-large-zh-v1.5` (Chinese BGE model, 1.3GB ONNX) via ONNX Runtime in a subprocess, providing fully offline semantic memory search with no external API calls.
+**OpenClaw 本地 ONNX BGE 向量嵌入插件 / Local ONNX-based BGE Embedding Provider**
 
 ---
 
-## Features
+## 简介 / Introduction
 
-- **Fully offline** — embeddings computed locally, no API key needed
-- **Subprocess isolation** — ONNX model runs in separate process to avoid blocking gateway
-- **Auto-initialization** — model loads at subprocess startup, warmup done automatically
-- **High quality Chinese embeddings** — uses `bge-large-zh-v1.5` (1024 dimensions)
+本插件为 OpenClaw 提供本地中文语义记忆搜索能力，使用 `bge-large-zh-v1.5` 模型（1.3GB ONNX）通过 ONNX Runtime 在子进程中运行，完全离线，无需外部 API。
+
+This plugin provides local Chinese semantic memory search for OpenClaw, using the `bge-large-zh-v1.5` model (1.3GB ONNX) via ONNX Runtime in a subprocess — fully offline, no external API calls needed.
 
 ---
 
-## Architecture
+## 特性 / Features
+
+- 🧠 **完全离线 / Fully Offline** — 本地计算向量，无需 API Key / Embeddings computed locally, no API key needed
+- 🔒 **安全隔离 / Subprocess Isolation** — ONNX 模型运行在独立进程，不阻塞 Gateway / Model runs in separate process to avoid blocking gateway
+- ⚡ **自动初始化 / Auto-initialization** — 子进程启动时自动加载模型 / Model loads automatically at subprocess startup
+- 🌐 **中文优化 / Chinese Optimized** — 使用 `bge-large-zh-v1.5` (1024 维) / Uses `bge-large-zh-v1.5` (1024 dimensions)
+
+---
+
+## 架构 / Architecture
 
 ```
 OpenClaw Gateway
     │
     └── onnx-bge-local provider (plugin)
             │
-            └── subprocess.js (node child process)
+            └── subprocess.js (Node.js 子进程 / subprocess)
                     │
                     └── ONNX Runtime
                             └── bge-large-zh-v1.5.onnx (1.3GB)
@@ -30,30 +36,30 @@ OpenClaw Gateway
 
 ---
 
-## Requirements
+## 环境要求 / Requirements
 
 - OpenClaw >= 2026.4.22
 - Node.js >= 18
-- ~2GB RAM (model + runtime)
-- Model file: `bge-large-zh-v1.5.onnx` (auto-downloaded to `~/.cache/` or use local path)
+- ~2GB RAM (模型 + 运行时 / model + runtime)
 
 ---
 
-## Installation
+## 安装 / Installation
 
 ```bash
-# Via ClawHub (recommended)
+# 方式一：通过 ClawHub（推荐）/ Via ClawHub (recommended)
 openclaw extension install openclaw-onnx-embed
 
-# Or manually
-git clone <repo> /root/.openclaw/extensions/openclaw-onnx-embed
+# 方式二：手动安装 / Manual install
+git clone https://github.com/bbj375767338-arch/openclaw-onnx-embed.git \
+  /root/.openclaw/extensions/openclaw-onnx-embed
 ```
 
 ---
 
-## Configuration
+## 配置 / Configuration
 
-The plugin auto-registers the `onnx-bge-local` memory embedding provider. In `openclaw.json`:
+在 `openclaw.json` 中启用插件：
 
 ```json
 {
@@ -67,7 +73,7 @@ The plugin auto-registers the `onnx-bge-local` memory embedding provider. In `op
 }
 ```
 
-Set as memory search provider (optional — `auto` also works):
+设置记忆搜索 provider（可选，`auto` 也会自动选择）：
 
 ```json
 {
@@ -83,62 +89,54 @@ Set as memory search provider (optional — `auto` also works):
 
 ---
 
-## Model
+## 模型 / Model
 
-The plugin downloads `bge-large-zh-v1.5` ONNX model automatically on first use via `@xenova/transformers`.
+插件首次使用时会自动通过 `@xenova/transformers` 下载模型文件。
 
-**Model location**: `~/.cache/Xenova/bge-large-zh-v1.5/model.onnx`
+The plugin automatically downloads the `bge-large-zh-v1.5` ONNX model on first use via `@xenova/transformers`.
 
-**Alternative**: Pre-download and set path in `openclaw.json`:
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "memorySearch": {
-        "local": {
-          "modelPath": "/path/to/bge-large-zh-v1.5/model.onnx"
-        }
-      }
-    }
-  }
-}
-```
+**模型路径 / Model location**: `~/.cache/Xenova/bge-large-zh-v1.5/model.onnx`
 
 ---
 
-## Troubleshooting
+## 故障排查 / Troubleshooting
 
 ### "Subprocess initialization timed out"
 
-Model load takes ~15-20s on first startup. If subprocess gets killed before loading completes, increase init timeout in plugin or ensure sufficient memory.
+模型首次加载需要 ~15-20 秒，请耐心等待。如果子进程被强制终止，请增加超时时间或确保内存充足。
+
+Model load takes ~15-20s on first startup. If subprocess gets killed, increase timeout or ensure sufficient memory.
 
 ### "Unknown memory embedding provider: onnx-bge-local"
 
+确保插件在 `plugins.entries` 中（不只是 `plugins.allow`）。
+
 Ensure plugin is in `plugins.entries` (not just `plugins.allow`) in `openclaw.json`.
 
-### Slow queries (~20-30s per query)
+### 首次查询慢 / Slow queries on first query
 
-Normal on first query after gateway restart (model loading). Model stays in memory for subsequent queries within the same session.
+Gateway 重启后首次查询较慢是正常现象（需要重新加载模型）。
+
+Slow first query after gateway restart is normal (model needs to reload).
 
 ---
 
-## Files
+## 文件结构 / Files
 
 ```
 openclaw-onnx-embed/
-├── index.js          ← Plugin entry, registers provider
-├── subprocess.js     ← Subprocess: loads ONNX, handles embedding requests
-├── adapter.js        ← (reserved)
-├── onnx-runtime.js   ← (reserved)
-├── tokenizer.js      ← (reserved)
-├── worker.js         ← (reserved)
-├── openclaw.plugin.json  ← Plugin manifest
+├── index.js              ← 插件入口 / Plugin entry
+├── subprocess.js         ← 子进程（ONNX 推理）/ Subprocess: ONNX inference
+├── adapter.js            ← (保留 / reserved)
+├── onnx-runtime.js       ← (保留 / reserved)
+├── tokenizer.js          ← (保留 / reserved)
+├── worker.js             ← (保留 / reserved)
+├── openclaw.plugin.json  ← 插件清单 / Plugin manifest
 └── package.json
 ```
 
 ---
 
-## License
+## 开源协议 / License
 
 MIT
