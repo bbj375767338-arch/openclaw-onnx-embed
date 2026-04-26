@@ -1,8 +1,7 @@
 {
   "name": "openclaw-onnx-embed",
   "version": "1.0.0",
-  "description": "OpenClaw ONNX BGE Memory Embedding Provider - Local offline embedding for bge-large-zh-v1.5",
-  "main": "index.js",
+  "description": "OpenClaw ONNX BGE Memory Embedding Provider",
   "engines": {
     "node": ">=18"
   },
@@ -13,19 +12,5 @@
     "extensions": [
       "./index.js"
     ]
-  },
-  "keywords": [
-    "openclaw",
-    "embedding",
-    "onnx",
-    "bge-large-zh-v1.5",
-    "memory",
-    "local-embedding"
-  ],
-  "author": "bbj375767338-arch",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/bbj375767338-arch/openclaw-onnx-embed.git"
   }
 }
