@@ -1,5 +1,5 @@
 /**
- * ONNX subprocess - runs in separate process to avoid blocking main thread
+ * ONNX subprocess - auto-initializes model at startup
  * Communicates with main process via JSON lines on stdin/stdout
  */
 
@@ -77,32 +77,6 @@ function sanitizeAndNormalizeEmbedding(vec) {
   return sanitized.map((value) => value / magnitude);
 }
 
-async function init() {
-  if (session) return;
-
-  console.error('[onnx-sub] Loading ONNX model...');
-  const t0 = Date.now();
-
-  const mod = await import('/root/.openclaw/embedding-model/node_modules/onnxruntime-node/dist/index.js');
-  ort = mod.default;
-
-  const tok = JSON.parse(fs.readFileSync(TOKENIZER_PATH, 'utf8'));
-  vocab = tok.model.vocab;
-  padId = vocab['[PAD]'] || 0;
-
-  const sessionOpts = {
-    graphOptimizationLevel: 'all',
-    intraOpNumThreads: 4,
-    interOpNumThreads: 2,
-  };
-  session = await ort.InferenceSession.create(MODEL_PATH, sessionOpts);
-  console.error(`[onnx-sub] Model ready in ${Date.now() - t0}ms!`);
-
-  // Warmup
-  await runInference([101, 102]);
-  console.error('[onnx-sub] Warmup done!');
-}
-
 function runInference(tokenIds) {
   const idsArr = new BigInt64Array(SEQ_LEN);
   const maskArr = new BigInt64Array(SEQ_LEN);
@@ -131,7 +105,6 @@ function runInference(tokenIds) {
 
 async function embedText(text) {
   const inputIds = tokenize(String(text).slice(0, 300));
-
   const t0 = Date.now();
   const results = await runInference(inputIds);
   const elapsed = Date.now() - t0;
@@ -151,42 +124,59 @@ async function embedText(text) {
     for (let j = 0; j < HIDDEN_SIZE; j++) embedding[j] /= count;
   }
 
-  console.error(`[onnx-sub] embedding done in ${elapsed}ms`);
+  console.error('[onnx-sub] embedding done in ' + elapsed + 'ms');
   return sanitizeAndNormalizeEmbedding(Array.from(embedding));
-}
-
-// Main loop - read JSON lines from stdin, write to stdout
-let initPromise = null;
-
-async function handleMessage(msg) {
-  if (msg.type === 'init') {
-    if (!initPromise) {
-      initPromise = init();
-    }
-    try {
-      await initPromise;
-      send({ type: 'ready' });
-    } catch (e) {
-      send({ type: 'error', error: e.message });
-    }
-  } else if (msg.type === 'embed') {
-    try {
-      const result = await embedText(msg.text);
-      send({ type: 'embedding', id: msg.id, result });
-    } catch (e) {
-      send({ type: 'error', id: msg.id, error: e.message });
-    }
-  }
 }
 
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n');
 }
 
+// Auto-initialize at startup
+async function init() {
+  console.error('[onnx-sub] Loading ONNX model...');
+  const t0 = Date.now();
+
+  const mod = await import('/root/.openclaw/embedding-model/node_modules/onnxruntime-node/dist/index.js');
+  ort = mod.default;
+
+  const tok = JSON.parse(fs.readFileSync(TOKENIZER_PATH, 'utf8'));
+  vocab = tok.model.vocab;
+  padId = vocab['[PAD]'] || 0;
+
+  const sessionOpts = {
+    graphOptimizationLevel: 'all',
+    intraOpNumThreads: 4,
+    interOpNumThreads: 2,
+  };
+  session = await ort.InferenceSession.create(MODEL_PATH, sessionOpts);
+  console.error('[onnx-sub] Model ready in ' + (Date.now() - t0) + 'ms!');
+
+  // Warmup
+  await runInference([101, 102]);
+  console.error('[onnx-sub] Warmup done!');
+
+  send({ type: 'ready' });
+}
+
+// Handle messages
+async function handleMessage(msg) {
+  if (msg.type === 'embed') {
+    try {
+      const result = await embedText(msg.text);
+      send({ type: 'embedding', id: msg.id, result });
+    } catch (e) {
+      send({ type: 'error', id: msg.id, error: e.message });
+    }
+  } else if (msg.type === 'ping') {
+    send({ type: 'pong', id: msg.id });
+  }
+}
+
 // Read stdin line by line
 let buffer = '';
 process.stdin.on('data', (chunk) => {
-  buffer += chunk;
+  buffer += chunk.toString();
   let newline;
   while ((newline = buffer.indexOf('\n')) !== -1) {
     const line = buffer.slice(0, newline);
@@ -203,4 +193,9 @@ process.stdin.on('data', (chunk) => {
 });
 
 process.stderr.on('data', () => {}); // Suppress stderr from parent
-console.error('[onnx-sub] Subprocess started, waiting for init...');
+
+// Start auto-init
+init().catch((e) => {
+  console.error('[onnx-sub] Init failed:', e.message);
+  process.exit(1);
+});
