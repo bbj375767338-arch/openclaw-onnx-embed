@@ -104,7 +104,7 @@ function runInference(tokenIds) {
 }
 
 async function embedText(text) {
-  const inputIds = tokenize(String(text).slice(0, 300));
+  const inputIds = tokenize(String(text).slice(0, 512));
   const t0 = Date.now();
   const results = await runInference(inputIds);
   const elapsed = Date.now() - t0;
