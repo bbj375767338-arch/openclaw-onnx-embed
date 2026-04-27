@@ -170,12 +170,8 @@ const onnxBgeMemoryEmbeddingProviderAdapter = {
       },
 
       embedBatch: async (texts) => {
-        // Run sequentially via subprocess (no concurrent ONNX load)
-        const results = [];
-        for (const t of texts) {
-          results.push(await embedInSubprocess(t));
-        }
-        return results;
+        // Run in parallel — subprocess handles concurrent ONNX inference via queue
+        return Promise.all(texts.map(t => embedInSubprocess(t)));
       }
     };
 
