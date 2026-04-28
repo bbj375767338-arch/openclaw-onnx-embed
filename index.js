@@ -186,7 +186,12 @@ const onnxBgeMemoryEmbeddingProviderAdapter = {
       },
 
       embedBatch: async (texts) => {
-        return Promise.all(texts.map(t => embedInSubprocess(t)));
+        // Serial processing to prevent queue overflow in subprocess
+        const results = [];
+        for (const text of texts) {
+          results.push(await embedInSubprocess(text));
+        }
+        return results;
       }
     };
 

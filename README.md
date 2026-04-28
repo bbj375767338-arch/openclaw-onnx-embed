@@ -137,6 +137,7 @@ The plugin automatically downloads the `bge-large-zh-v1.5` ONNX model on first u
 ### 2026-04-28 优化 v3
 
 - **超时**: embedding 超时从 60s 增加到 180s（避免批量索引时超时）
+- **并发修复**: embedBatch 从 Promise.all 并行改为串行处理，防止队列溢出
 - **问题修复**: batchEmbed 并行请求在串行队列处理时超时问题
 
 ### 2026-04-28 优化 v2
