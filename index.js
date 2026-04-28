@@ -156,9 +156,9 @@ async function embedInSubprocess(text) {
     const timeout = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
-        reject(new Error('Embedding timed out after 60s'));
+        reject(new Error('Embedding timed out after 180s'));
       }
-    }, 60000);
+    }, 180000);
 
     pending.get(id)?.ref?.();
   });

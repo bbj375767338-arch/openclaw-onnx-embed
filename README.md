@@ -134,6 +134,11 @@ The plugin automatically downloads the `bge-large-zh-v1.5` ONNX model on first u
 
 ## 优化记录 / Optimization History
 
+### 2026-04-28 优化 v3
+
+- **超时**: embedding 超时从 60s 增加到 180s（避免批量索引时超时）
+- **问题修复**: batchEmbed 并行请求在串行队列处理时超时问题
+
 ### 2026-04-28 优化 v2
 
 - **Tokenizer**: 替换简陋逐字符分词 → 标准 BERT WordPiece（支持中英文子词）
