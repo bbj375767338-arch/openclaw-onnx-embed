@@ -4,8 +4,11 @@
  */
 
 import { readFileSync } from 'fs';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
 const MODEL_PATH = '/root/.openclaw/embedding-model/node_modules/@xenova/transformers/.cache/Xenova/bge-large-zh-v1.5/model.onnx';
+const TOKENIZER_PATH = '/root/.openclaw/embedding-model/node_modules/@xenova/transformers/.cache/Xenova/bge-large-zh-v1.5/tokenizer.json';
 
 const SEQ_LEN = 512;
 const HIDDEN_SIZE = 1024;
@@ -14,6 +17,7 @@ let ort = null;
 let session = null;
 let vocab = null;
 let padId = null;
+let tokenizer = null;
 
 export async function init() {
   if (session) return;
@@ -21,16 +25,28 @@ export async function init() {
   const mod = await import('/root/.openclaw/embedding-model/node_modules/onnxruntime-node/dist/index.js');
   ort = mod.default;
 
-  // Load vocab
-  const tok = JSON.parse(readFileSync('/root/.openclaw/embedding-model/node_modules/@xenova/transformers/.cache/Xenova/bge-large-zh-v1.5/tokenizer.json', 'utf8'));
+  // Load vocab for padding
+  const tok = JSON.parse(readFileSync(TOKENIZER_PATH, 'utf8'));
   vocab = tok.model.vocab;
   padId = vocab['[PAD]'] || 0;
 
+  // Load proper tokenizer
+  const { PreTrainedTokenizer } = require('/root/.openclaw/embedding-model/node_modules/@xenova/transformers/src/tokenizers.js');
+  const tokenizerJSON = JSON.parse(readFileSync(TOKENIZER_PATH, 'utf8'));
+  tokenizer = new PreTrainedTokenizer(tokenizerJSON, {});
+
+  // Adaptive threading
+  const cpuCount = require('os').cpus().length;
+  const intraThreads = Math.min(cpuCount, 4);
+  const interThreads = Math.min(Math.max(cpuCount - 1, 1), 2);
+
   const sessionOpts = {
     graphOptimizationLevel: 'all',
-    intraOpNumThreads: 4,
-    interOpNumThreads: 2,
+    intraOpNumThreads: intraThreads,
+    interOpNumThreads: interThreads,
   };
+  console.log(`[onnx-bge] Thread config: intra=${intraThreads}, inter=${interThreads}`);
+
   session = await ort.InferenceSession.create(MODEL_PATH, sessionOpts);
   console.log(`[onnx-bge] Model ready! Inputs: ${session.inputNames}`);
 }
@@ -45,8 +61,8 @@ function sanitizeAndNormalizeEmbedding(vec) {
 export async function embedText(text) {
   await init();
 
-  const { tokenize } = await import('./tokenizer.js');
-  const inputIds = tokenize(String(text).slice(0, 300));
+  // Use proper tokenizer - no manual truncation needed, encode() handles it
+  const inputIds = tokenizer.encode(String(text).slice(0, 2048), null, { add_special_tokens: true });
 
   const idsArr = new BigInt64Array(SEQ_LEN);
   const maskArr = new BigInt64Array(SEQ_LEN);
@@ -91,6 +107,6 @@ export async function embedText(text) {
     for (let j = 0; j < HIDDEN_SIZE; j++) embedding[j] /= count;
   }
 
-  console.log(`[onnx-bge] embedding done in ${elapsed}ms`);
+  console.log(`[onnx-bge] embedding done in ${elapsed}ms, tokens=${inputIds.length}`);
   return sanitizeAndNormalizeEmbedding(Array.from(embedding));
 }

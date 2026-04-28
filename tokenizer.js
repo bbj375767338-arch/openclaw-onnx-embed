@@ -1,67 +1,51 @@
 /**
- * BERT tokenizer with Chinese character-level handling
- * Reuses tokenizer.json from existing cache
+ * BERT tokenizer using @xenova/transformers PreTrainedTokenizer
+ * Loads tokenizer.json from bge-large-zh-v1.5 cache
+ * Provides proper WordPiece tokenization for both Chinese and English text
  */
 
 import { readFileSync } from 'fs';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
 const TOKENIZER_PATH = '/root/.openclaw/embedding-model/node_modules/@xenova/transformers/.cache/Xenova/bge-large-zh-v1.5/tokenizer.json';
 
-let vocab = null;
+let tokenizer = null;
 
-export function loadVocab() {
-  if (vocab) return vocab;
-  const tok = JSON.parse(readFileSync(TOKENIZER_PATH, 'utf8'));
-  vocab = tok.model.vocab;
-  return vocab;
+export function loadTokenizer() {
+  if (tokenizer) return tokenizer;
+
+  // Use PreTrainedTokenizer directly from JSON - no network needed
+  const { PreTrainedTokenizer } = require('/root/.openclaw/embedding-model/node_modules/@xenova/transformers/src/tokenizers.js');
+
+  const tokenizerJSON = JSON.parse(readFileSync(TOKENIZER_PATH, 'utf8'));
+  const tokenizerConfig = {};
+  tokenizer = new PreTrainedTokenizer(tokenizerJSON, tokenizerConfig);
+
+  return tokenizer;
 }
 
+/**
+ * Tokenize text and return token IDs
+ * Handles both Chinese (character-level WordPiece) and English (subword WordPiece)
+ * @param {string} text - Input text (will be truncated at 512 tokens)
+ * @returns {number[]} Array of token IDs with [CLS] and [SEP] already added
+ */
 export function tokenize(text) {
-  const v = loadVocab();
-  const clsId = v['[CLS]'] || 101;
-  const sepId = v['[SEP]'] || 102;
-  const unkId = v['[UNK]'] || 100;
+  const tok = loadTokenizer();
+  // encode() adds [CLS] and [SEP] automatically when add_special_tokens=true (default)
+  const ids = tok.encode(String(text).slice(0, 2048), null, { add_special_tokens: true });
+  // Truncate to max 512 (model's SEQ_LEN)
+  return ids.slice(0, 512);
+}
 
-  const tokens = [];
-  let currentWord = '';
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const code = ch.charCodeAt(0);
-
-    if (code > 127) {
-      // Chinese character
-      if (currentWord) {
-        if (currentWord in v) tokens.push(currentWord);
-        else tokens.push('[UNK]');
-        currentWord = '';
-      }
-      if (ch in v) tokens.push(ch);
-      else tokens.push('[UNK]');
-    } else if (/\s/.test(ch)) {
-      if (currentWord) { tokens.push(currentWord); currentWord = ''; }
-    } else if (/[.,!?;:'"()\[\]{}]/.test(ch)) {
-      if (currentWord) { tokens.push(currentWord); currentWord = ''; }
-    } else {
-      currentWord += ch.toLowerCase();
-    }
-  }
-  if (currentWord) tokens.push(currentWord);
-
-  // Convert to IDs
-  const ids = [clsId];
-  for (const t of tokens) {
-    if (ids.length >= 510) break;
-    if (t === '[UNK]') { ids.push(unkId); continue; }
-    if (t in v) ids.push(v[t]);
-    else {
-      // Sub-word fallback to character level
-      for (const c of t) {
-        if (ids.length >= 510) break;
-        ids.push(c in v ? v[c] : unkId);
-      }
-    }
-  }
-  ids.push(sepId);
-  return ids;
+/**
+ * Get tokenizer info for debugging
+ */
+export function getTokenizerInfo() {
+  const tok = loadTokenizer();
+  return {
+    vocab_size: tok.model.vocab_size,
+    special_tokens: tok.all_special_ids,
+  };
 }

@@ -6,6 +6,7 @@
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const { readFileSync, writeFileSync } = fs;
 
 // Load SDK via absolute path
 const openclawSdk = require('/usr/local/nodejs/lib/node_modules/openclaw/dist/plugin-sdk/core.js');
@@ -19,17 +20,28 @@ const PROVIDER_ID = 'onnx-bge-local';
 const DEFAULT_MODEL = 'bge-large-zh-v1.5';
 
 // ============================================================
-// Subprocess manager
+// Subprocess manager - true singleton
 // ============================================================
 let subprocess = null;
+let subprocessPid = null;
 let pending = new Map();
 let idCounter = 0;
 let initPromise = null;
 
+function isSubprocessAlive() {
+  if (!subprocess || !subprocessPid) return false;
+  try {
+    process.kill(subprocessPid, 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function resetSubprocess() {
   subprocess = null;
+  subprocessPid = null;
   initPromise = null;
-  // Reject all pending
   for (const [id, { resolve, reject }] of pending) {
     reject(new Error('Subprocess restarted'));
   }
@@ -37,12 +49,21 @@ function resetSubprocess() {
 }
 
 function initSubprocess() {
+  if (initPromise && isSubprocessAlive()) {
+    return initPromise;
+  }
+  if (subprocess && !isSubprocessAlive()) {
+    resetSubprocess();
+  }
   if (initPromise) return initPromise;
+
+  console.log('[onnx-bge] Starting ONNX subprocess...');
   initPromise = new Promise((resolve, reject) => {
-    console.log('[onnx-bge] Starting ONNX subprocess...');
     subprocess = spawn('node', [SUBPROCESS_PATH], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
+    subprocessPid = subprocess.pid;
+    console.log('[onnx-bge] Subprocess spawned with PID:', subprocessPid);
 
     let stdoutBuffer = '';
 
@@ -95,10 +116,9 @@ function initSubprocess() {
       resetSubprocess();
     });
 
-    // Timeout after 90 seconds for init
     const timeout = setTimeout(() => {
       if (!subprocess || subprocess.exitCode !== null) {
-        return; // already exited
+        return;
       }
       console.error('[onnx-bge] Subprocess init timed out after 90s');
       subprocess.kill();
@@ -106,9 +126,9 @@ function initSubprocess() {
       reject(new Error('Subprocess initialization timed out'));
     }, 90000);
 
-    // Clear timeout if subprocess succeeds
     subprocess.once('ready', () => clearTimeout(timeout));
   });
+
   return initPromise;
 }
 
@@ -121,7 +141,6 @@ function sendToSubprocess(msg) {
 }
 
 async function embedInSubprocess(text) {
-  // If subprocess died between calls, initPromise is now null (resetSubprocess was called)
   await initSubprocess();
 
   return new Promise((resolve, reject) => {
@@ -130,12 +149,10 @@ async function embedInSubprocess(text) {
 
     if (!sendToSubprocess({ type: 'embed', id, text })) {
       pending.delete(id);
-      // Subprocess died concurrently - initSubprocess will reset and the next call will reinit
       reject(new Error('Subprocess died during embedding'));
       return;
     }
 
-    // Timeout after 60 seconds per embedding
     const timeout = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
@@ -143,7 +160,7 @@ async function embedInSubprocess(text) {
       }
     }, 60000);
 
-    pending.get(id)?.ref?.(); // keep promise alive (no-op in new Promise context)
+    pending.get(id)?.ref?.();
   });
 }
 
@@ -158,7 +175,6 @@ const onnxBgeMemoryEmbeddingProviderAdapter = {
   shouldContinueAutoSelection: () => true,
 
   create: async (options) => {
-    // Start subprocess initialization at plugin load time (non-blocking)
     initSubprocess().catch(err => console.error('[onnx-bge] Subprocess init failed:', err.message));
 
     const provider = {
@@ -170,7 +186,6 @@ const onnxBgeMemoryEmbeddingProviderAdapter = {
       },
 
       embedBatch: async (texts) => {
-        // Run in parallel — subprocess handles concurrent ONNX inference via queue
         return Promise.all(texts.map(t => embedInSubprocess(t)));
       }
     };
@@ -182,6 +197,15 @@ const onnxBgeMemoryEmbeddingProviderAdapter = {
         cacheKeyData: {
           provider: PROVIDER_ID,
           model: DEFAULT_MODEL
+        },
+        batchEmbed: async (options) => {
+          if (!options.chunks.length) return [];
+          try {
+            return await provider.embedBatch(options.chunks.map(c => c.text));
+          } catch (err) {
+            console.error('[onnx-bge] batchEmbed failed:', err.message);
+            return null;
+          }
         }
       }
     };

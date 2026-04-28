@@ -3,8 +3,10 @@
  * Communicates with main process via JSON lines on stdin/stdout
  */
 
-const path = require('path');
-const fs = require('fs');
+import { readFileSync } from 'fs';
+import { createRequire } from 'module';
+import { cpus } from 'os';
+const require = createRequire(import.meta.url);
 
 const MODEL_PATH = '/root/.openclaw/embedding-model/node_modules/@xenova/transformers/.cache/Xenova/bge-large-zh-v1.5/model.onnx';
 const TOKENIZER_PATH = '/root/.openclaw/embedding-model/node_modules/@xenova/transformers/.cache/Xenova/bge-large-zh-v1.5/tokenizer.json';
@@ -15,59 +17,14 @@ let ort = null;
 let session = null;
 let vocab = null;
 let padId = null;
+let tokenizer = null;
 
-function loadVocab() {
-  if (vocab) return vocab;
-  const tok = JSON.parse(fs.readFileSync(TOKENIZER_PATH, 'utf8'));
-  vocab = tok.model.vocab;
-  return vocab;
-}
-
-function tokenize(text) {
-  const v = loadVocab();
-  const clsId = v['[CLS]'] || 101;
-  const sepId = v['[SEP]'] || 102;
-  const unkId = v['[UNK]'] || 100;
-
-  const tokens = [];
-  let currentWord = '';
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const code = ch.charCodeAt(0);
-
-    if (code > 127) {
-      if (currentWord) {
-        if (currentWord in v) tokens.push(currentWord);
-        else tokens.push('[UNK]');
-        currentWord = '';
-      }
-      if (ch in v) tokens.push(ch);
-      else tokens.push('[UNK]');
-    } else if (/\s/.test(ch)) {
-      if (currentWord) { tokens.push(currentWord); currentWord = ''; }
-    } else if (/[.,!?;:'"()\[\]{}]/.test(ch)) {
-      if (currentWord) { tokens.push(currentWord); currentWord = ''; }
-    } else {
-      currentWord += ch.toLowerCase();
-    }
-  }
-  if (currentWord) tokens.push(currentWord);
-
-  const ids = [clsId];
-  for (const t of tokens) {
-    if (ids.length >= 510) break;
-    if (t === '[UNK]') { ids.push(unkId); continue; }
-    if (t in v) ids.push(v[t]);
-    else {
-      for (const c of t) {
-        if (ids.length >= 510) break;
-        ids.push(c in v ? v[c] : unkId);
-      }
-    }
-  }
-  ids.push(sepId);
-  return ids;
+function loadTokenizer() {
+  if (tokenizer) return tokenizer;
+  const { PreTrainedTokenizer } = require('/root/.openclaw/embedding-model/node_modules/@xenova/transformers/src/tokenizers.js');
+  const tokenizerJSON = JSON.parse(readFileSync(TOKENIZER_PATH, 'utf8'));
+  tokenizer = new PreTrainedTokenizer(tokenizerJSON, {});
+  return tokenizer;
 }
 
 function sanitizeAndNormalizeEmbedding(vec) {
@@ -104,7 +61,9 @@ function runInference(tokenIds) {
 }
 
 async function embedText(text) {
-  const inputIds = tokenize(String(text).slice(0, 512));
+  const tok = loadTokenizer();
+  const inputIds = tok.encode(String(text).slice(0, 2048), null, { add_special_tokens: true });
+
   const t0 = Date.now();
   const results = await runInference(inputIds);
   const elapsed = Date.now() - t0;
@@ -124,7 +83,7 @@ async function embedText(text) {
     for (let j = 0; j < HIDDEN_SIZE; j++) embedding[j] /= count;
   }
 
-  console.error('[onnx-sub] embedding done in ' + elapsed + 'ms');
+  console.error('[onnx-sub] embedding done in ' + elapsed + 'ms, tokens=' + inputIds.length);
   return sanitizeAndNormalizeEmbedding(Array.from(embedding));
 }
 
@@ -140,32 +99,58 @@ async function init() {
   const mod = await import('/root/.openclaw/embedding-model/node_modules/onnxruntime-node/dist/index.js');
   ort = mod.default;
 
-  const tok = JSON.parse(fs.readFileSync(TOKENIZER_PATH, 'utf8'));
+  const tok = JSON.parse(readFileSync(TOKENIZER_PATH, 'utf8'));
   vocab = tok.model.vocab;
   padId = vocab['[PAD]'] || 0;
 
+  // Adaptive threading: use min(cores, 4) for intra, 2 for inter
+  const cpuCount = cpus().length;
+  const intraThreads = Math.min(cpuCount, 4);
+  const interThreads = Math.min(Math.max(cpuCount - 1, 1), 2);
+
   const sessionOpts = {
     graphOptimizationLevel: 'all',
-    intraOpNumThreads: 4,
-    interOpNumThreads: 2,
+    intraOpNumThreads: intraThreads,
+    interOpNumThreads: interThreads,
   };
+  console.error('[onnx-sub] Thread config: intra=' + intraThreads + ', inter=' + interThreads);
+
   session = await ort.InferenceSession.create(MODEL_PATH, sessionOpts);
   console.error('[onnx-sub] Model ready in ' + (Date.now() - t0) + 'ms!');
 
-  // Warmup
-  await runInference([101, 102]);
+  // Warmup with proper tokenization
+  const warmupTok = loadTokenizer();
+  const warmupIds = warmupTok.encode('warmup', null, { add_special_tokens: true });
+  await runInference(warmupIds);
   console.error('[onnx-sub] Warmup done!');
 
   send({ type: 'ready' });
+}
+
+// Serial queue for embed requests - prevents concurrent ONNX inference corruption
+let embedQueue = Promise.resolve();
+
+function queueEmbed(text) {
+  return new Promise((resolve, reject) => {
+    embedQueue = embedQueue.then(async () => {
+      try {
+        const result = await embedText(text);
+        resolve(result);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
 }
 
 // Handle messages
 async function handleMessage(msg) {
   if (msg.type === 'embed') {
     try {
-      const result = await embedText(msg.text);
+      const result = await queueEmbed(msg.text);
       send({ type: 'embedding', id: msg.id, result });
     } catch (e) {
+      console.error('[onnx-sub] embed error:', e.message);
       send({ type: 'error', id: msg.id, error: e.message });
     }
   } else if (msg.type === 'ping') {
@@ -196,6 +181,6 @@ process.stderr.on('data', () => {}); // Suppress stderr from parent
 
 // Start auto-init
 init().catch((e) => {
-  console.error('[onnx-sub] Init failed:', e.message);
+  console.error('[onnx-sub] Init failed:', e.message, e.stack);
   process.exit(1);
 });

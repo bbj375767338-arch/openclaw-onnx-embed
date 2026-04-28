@@ -2,6 +2,7 @@
   "name": "openclaw-onnx-embed",
   "version": "1.0.0",
   "description": "OpenClaw ONNX BGE Memory Embedding Provider",
+  "type": "module",
   "engines": {
     "node": ">=18"
   },

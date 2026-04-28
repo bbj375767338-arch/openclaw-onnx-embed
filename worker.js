@@ -90,17 +90,25 @@ async function init() {
   vocab = tok.model.vocab;
   padId = vocab['[PAD]'] || 0;
 
+  const cpuCount = require('os').cpus().length;
+  const intraThreads = Math.min(cpuCount, 4);
+  const interThreads = Math.min(Math.max(cpuCount - 1, 1), 2);
+
   const sessionOpts = {
     graphOptimizationLevel: 'all',
-    intraOpNumThreads: 4,
-    interOpNumThreads: 2,
+    intraOpNumThreads: intraThreads,
+    interOpNumThreads: interThreads,
   };
+  console.log(`[onnx-worker] Thread config: intra=${intraThreads}, inter=${interThreads}`);
+
   session = await ort.InferenceSession.create(MODEL_PATH, sessionOpts);
   console.log(`[onnx-worker] Model ready in ${Date.now() - t0}ms!`);
 
   // Warmup
   await runInference([101, 102]);
   console.log('[onnx-worker] Warmup done!');
+
+  parentPort.postMessage({ type: 'ready' });
 }
 
 function runInference(tokenIds) {
