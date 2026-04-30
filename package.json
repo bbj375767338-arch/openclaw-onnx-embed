@@ -1,17 +1,19 @@
 {
-  "name": "openclaw-onnx-embed",
+  "name": "openclaw-local-memory",
   "version": "1.0.0",
-  "description": "OpenClaw ONNX BGE Memory Embedding Provider",
+  "description": "OpenClaw 本地记忆方案 - 本地embedding + MySQL永久记忆",
   "type": "module",
   "engines": {
     "node": ">=18"
   },
-  "peerDependencies": {
-    "openclaw": ">=2026.4.22"
-  },
   "openclaw": {
-    "extensions": [
-      "./index.js"
+    "plugins": [
+      "./plugins/onnx-embed/index.js",
+      "./plugins/memory-sync/index.js"
     ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bbj375767338-arch/openclaw-onnx-embed"
   }
 }

@@ -1,0 +1,23 @@
+{
+  "id": "openclaw-memory-sync",
+  "enabledByDefault": false,
+  "contracts": {},
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "db": {
+        "type": "object",
+        "description": "MySQL database configuration",
+        "default": {},
+        "properties": {
+          "host": { "type": "string", "default": "localhost" },
+          "port": { "type": "number", "default": 3306 },
+          "user": { "type": "string", "default": "openclaw" },
+          "password": { "type": "string", "default": "" },
+          "database": { "type": "string", "default": "openclaw_memory" }
+        }
+      }
+    }
+  }
+}

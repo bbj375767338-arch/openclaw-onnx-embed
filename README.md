@@ -1,75 +1,111 @@
-# openclaw-onnx-embed
+# OpenClaw 本地记忆方案
 
-**OpenClaw 本地 ONNX BGE 向量嵌入插件 / Local ONNX-based BGE Embedding Provider**
+**中文优化 · 完全本地 · 高效检索 · 永久记忆**
+
+| 特性 | 说明 |
+|------|------|
+| 🧠 本地 embedding | bge-large-zh-v1.5 ONNX 模型，完全离线运行 |
+| 🔍 混合检索 | ANN 向量召回 + BM25 精确匹配 + 关键词叠加 |
+| 💾 MySQL 永久记忆 | 结构化存储，支持记忆演化(evolving)和淘汰(superseded) |
+| 📈 L0/L1 多层摘要 | 增量摘要加速检索，节省 token |
 
 ---
 
-## 简介 / Introduction
+## 包含插件
 
-本插件为 OpenClaw 提供本地中文语义记忆搜索能力，使用 `bge-large-zh-v1.5` 模型（1.3GB ONNX）通过 ONNX Runtime 在子进程中运行，完全离线，无需外部 API。
+| 插件 | 功能 |
+|------|------|
+| `openclaw-onnx-embed` | 本地 BGE 向量 embedding 提供者 |
+| `openclaw-memory-sync` | MySQL 记忆同步与检索工具 |
 
-This plugin provides local Chinese semantic memory search for OpenClaw, using the `bge-large-zh-v1.5` model (1.3GB ONNX) via ONNX Runtime in a subprocess — fully offline, no external API calls needed.
+## 架构
+
+```
+OpenClaw Agent
+    │
+    ├── openclaw-onnx-embed
+    │       └── bge-large-zh-v1.5 ONNX (1024dim) ← 本地离线，中文优化
+    │
+    └── openclaw-memory-sync
+            ├── memory_recall    ← 记忆召回
+            ├── memory_search    ← BM25+向量混合搜索
+            ├── memory_save      ← 记忆保存
+            └── memory_stats     ← 状态统计
+                    │
+                    └── MySQL (openclaw_memory)
+                            ├── memories          ← 原始记忆 + 版本链
+                            ├── summaries         ← L0/L1 摘要
+                            └── memory_topics     ← Topic 图谱
+```
 
 ---
 
 ## 特性 / Features
 
-- 🧠 **完全离线 / Fully Offline** — 本地计算向量，无需 API Key / Embeddings computed locally, no API key needed
-- 🔒 **安全隔离 / Subprocess Isolation** — ONNX 模型运行在独立进程，不阻塞 Gateway / Model runs in separate process to avoid blocking gateway
-- ⚡ **自动初始化 / Auto-initialization** — 子进程启动时自动加载模型 / Model loads automatically at subprocess startup
-- 🌐 **中文优化 / Chinese Optimized** — 使用 `bge-large-zh-v1.5` (1024 维) / Uses `bge-large-zh-v1.5` (1024 dimensions)
-- 📝 **标准分词 / Proper Tokenization** — 使用 BERT WordPiece tokenizer，告别简陋的逐字符分词 / Uses proper BERT WordPiece tokenizer instead of crude character-by-character splitting
-- 🔢 **自适应线程 / Adaptive Threading** — 根据 CPU 核心数自动调整 ONNX Runtime 线程数 / Automatically adjusts ONNX Runtime thread count based on CPU cores
-- 📦 **批量索引 / Batch Indexing** — 支持 memory-core 批量 embedding，高效索引大量文件 / Supports memory-core batch embedding for efficient file indexing
-- 🔄 **进程复用 / Process Reuse** — 单例模式避免重复加载模型 / Singleton pattern avoids repeated model loading
+### openclaw-onnx-embed
+
+- 🧠 **完全离线** — 本地计算向量，无需 API Key
+- 🔒 **安全隔离** — ONNX 运行在独立子进程
+- 🌐 **中文优化** — bge-large-zh-v1.5 (1024 维)
+- 📝 **标准分词** — BERT WordPiece tokenizer
+- 🔢 **自适应线程** — 根据 CPU 核心数自动调整
+- 📦 **批量索引** — 支持 memory-core 批量 embedding
+
+### openclaw-memory-sync
+
+- 💾 **MySQL 持久化** — 结构化存储，永久保存
+- 🔄 **记忆演化** — 支持膨胀(evolving)和淘汰(superseded)
+- 📊 **多层摘要** — L0 (~100 tokens), L1 (~1k tokens)
+- 🔍 **混合检索** — 向量 + 关键词 + 时间权重重排序
+- 🔗 **关联图谱** — Topic 和 Link 图谱支持
+- ⚡ **增量迁移** — 幂等迁移 OpenClaw 已有记忆
 
 ---
 
-## 架构 / Architecture
-
-```
-OpenClaw Gateway
-    │
-    └── onnx-bge-local provider (index.js plugin)
-            │
-            └── subprocess.js (Node.js subprocess)
-                    │
-                    ├── PreTrainedTokenizer (BERT WordPiece)
-                    │       └── tokenizer.json (21k vocab)
-                    │
-                    └── ONNX Runtime
-                            └── bge-large-zh-v1.5.onnx (1.3GB, 1024dim)
-```
-
----
-
-## 环境要求 / Requirements
+## 环境要求
 
 - OpenClaw >= 2026.4.22
 - Node.js >= 18
-- ~2GB RAM (模型 + 运行时 / model + runtime)
-- 推荐 2+ 核 CPU / 2+ cores recommended
+- MySQL >= 5.7 (或使用 Docker)
+- ~2GB RAM (embedding 模型 + 运行时)
 
 ---
 
-## 安装 / Installation
+## 安装
+
+### 方式一：ClawHub (推荐)
 
 ```bash
-# 方式一：通过 ClawHub（推荐）/ Via ClawHub (recommended)
-openclaw extension install openclaw-onnx-embed
+openclaw plugins install openclaw-onnx-embed
+openclaw plugins install openclaw-memory-sync
+```
 
-# 方式二：手动安装 / Manual install
+### 方式二：手动安装
+
+```bash
 git clone https://github.com/bbj375767338-arch/openclaw-onnx-embed.git \
-  ~/.openclaw/extensions/openclaw-onnx-embed
+  ~/.openclaw/extensions/openclaw-local-memory
 ```
 
 ---
 
-## 配置 / Configuration
+## 配置
 
-### 基础配置 / Basic Configuration
+### 1. MySQL 数据库
 
-在 `openclaw.json` 中启用插件：
+```bash
+# 创建数据库和用户
+mysql -u root -p
+
+CREATE DATABASE openclaw_memory;
+CREATE USER 'openclaw'@'localhost' IDENTIFIED BY 'your_password';
+GRANT ALL PRIVILEGES ON openclaw_memory.* TO 'openclaw'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+### 2. 插件配置
+
+在 `openclaw.json` 中启用：
 
 ```json
 {
@@ -77,164 +113,95 @@ git clone https://github.com/bbj375767338-arch/openclaw-onnx-embed.git \
     "entries": {
       "openclaw-onnx-embed": {
         "enabled": true
+      },
+      "openclaw-memory-sync": {
+        "enabled": true
       }
-    }
+    },
+    "allow": [
+      "openclaw-onnx-embed",
+      "openclaw-memory-sync"
+    ]
   }
 }
 ```
 
-### 启用批量索引 / Enable Batch Indexing
+### 3. memory-sync 数据库配置
 
-```json
-{
-  "agents": {
-    "defaults": {
-      "memorySearch": {
-        "provider": "auto",
-        "remote": {
-          "baseUrl": "http://127.0.0.1:18790",
-          "apiKey": "local-onnx-key",
-          "batch": {
-            "enabled": true
-          }
-        }
-      }
-    }
-  }
-}
+在插件目录创建 `db/config.js` 或设置环境变量：
+
+```javascript
+// ~/.openclaw/extensions/openclaw-local-memory/plugins/memory-sync/db/config.js
+module.exports = {
+  host: 'localhost',
+  user: 'openclaw',
+  password: 'your_password',
+  database: 'openclaw_memory'
+};
 ```
 
 ---
 
-## 性能 / Performance
+## 使用方法
 
-| 指标 | 值 |
-|------|-----|
-| 模型大小 | 1.3 GB |
-| 向量维度 | 1024 |
-| Embedding 速度 | ~1.5s/条 (2核 CPU) |
-| 批量索引 | 支持 |
-| 内存占用 | ~1.5GB |
+### Agent 工具
 
-**注意**: 实际速度受 CPU 核心数影响。双核 CPU ~1.5s/条，四核可提升至 ~0.8s/条。
+| 工具 | 说明 |
+|------|------|
+| `memory_recall` | 任务前召回相关记忆 |
+| `memory_search` | BM25+向量混合搜索 |
+| `memory_save` | 保存任务结果到记忆 |
+| `memory_stats` | 查看记忆系统状态 |
 
-Note: Actual speed depends on CPU cores. Dual-core ~1.5s/query, quad-core can reach ~0.8s/query.
+### 手动触发迁移
 
----
-
-## 模型 / Model
-
-插件首次使用时会自动通过 `@xenova/transformers` 下载模型文件。
-
-The plugin automatically downloads the `bge-large-zh-v1.5` ONNX model on first use via `@xenova/transformers`.
-
-**模型路径 / Model location**: `~/.cache/Xenova/bge-large-zh-v1.5/`
-
----
-
-## 优化记录 / Optimization History
-
-### 2026-04-28 优化 v3
-
-- **超时**: embedding 超时从 60s 增加到 180s（避免批量索引时超时）
-- **并发修复**: embedBatch 从 Promise.all 并行改为串行处理，防止队列溢出
-- **问题修复**: batchEmbed 并行请求在串行队列处理时超时问题
-
-### 2026-04-28 优化 v2
-
-- **Tokenizer**: 替换简陋逐字符分词 → 标准 BERT WordPiece（支持中英文子词）
-- **线程**: 固定 4 threads → 自适应（根据 CPU 核心数）
-- **批量**: 添加 batchEmbed 方法，支持 memory-core 批量索引
-- **进程**: subprocess 单例模式，避免重复加载模型
-- **Manager 修复**: 修复 openclaw memory-core batch.enabled 初始计算 bug
-
-### 初始版本 v1 (2026-04-25)
-
-- 基础 ONNX subprocess 架构
-- 简陋逐字符 tokenizer
-- 固定线程数
-
----
-
-## 故障排查 / Troubleshooting
-
-### "Subprocess initialization timed out"
-
-模型首次加载需要 ~15-20 秒，请耐心等待。如果子进程被强制终止，请增加超时时间或确保内存充足。
-
-Model load takes ~15-20s on first startup. If subprocess gets killed, increase timeout or ensure sufficient memory.
-
-### "Unknown memory embedding provider: onnx-bge-local"
-
-确保插件在 `plugins.entries` 中（不只是 `plugins.allow`）。
-
-Ensure plugin is in `plugins.entries` (not just `plugins.allow`) in `openclaw.json`.
-
-### Batch 模式不工作 / Batch mode not working
-
-检查 `openclaw.json` 中 `memorySearch.remote.batch.enabled` 是否为 `true`。
-
-Check that `memorySearch.remote.batch.enabled` is `true` in `openclaw.json`.
-
----
-
-## 已知问题 / Known Issues
-
-### OpenClaw 4.27 sqlite-vec 向量搜索问题
-
-**问题描述**: 在 OpenClaw 4.27 版本中，如果使用内置 `memory-core` 插件的向量搜索功能，可能会遇到 `sqlite-vec` 加载失败的问题。
-
-**错误信息**:
-```
-[memory] sqlite-vec unavailable: Cannot find package 'sqlite-vec'
-imported from .../engine-storage-*.js
-Did you mean to import "sqlite-vec/index.cjs"?
-Vector: unavailable
-```
-
-**原因**: OpenClaw 4.27 修改了 bundled runtime dependencies 的管理方式，导致 `sqlite-vec` 包没有被正确包含在 plugin runtime deps 快照中。这是一个 OpenClaw 核心问题，不影响本插件的 embedding 功能，但会影响 memory-core 的向量搜索。
-
-**临时解决方案**:
 ```bash
-# 找到 plugin-runtime-deps 目录
-RUNTIME_DEPS_DIR="$HOME/.openclaw/plugin-runtime-deps/openclaw-2026.4.27-*/node_modules"
-
-# 从 OpenClaw 全局安装创建符号链接
-ln -sf /path/to/openclaw/node_modules/sqlite-vec "$RUNTIME_DEPS_DIR/sqlite-vec"
-
-# 重启 OpenClaw gateway
-systemctl restart openclaw-gateway
+node plugins/memory-sync/db/migrator.js
 ```
-
-**验证修复**:
-```bash
-openclaw memory status
-# 应该显示 Vector: ready
-```
-
-**官方修复**:
-- 相关 Issue: [openclaw#74692](https://github.com/openclaw/openclaw/issues/74692)
-- 修复 PR: [openclaw#74711](https://github.com/openclaw/openclaw/pull/74711)
 
 ---
 
-## 文件结构 / Files
+## 数据库结构
+
+```sql
+memories          -- 主记忆表
+memory_versions   -- 版本历史链
+summaries         -- L0/L1 摘要
+memory_topics     -- Topic 关联
+memory_links      -- Link 关联
+contradictions    -- 矛盾记录
+```
+
+---
+
+## 文件结构
 
 ```
 openclaw-onnx-embed/
-├── index.js              ← 插件入口 (plugin-sdk) / Plugin entry
-├── subprocess.js         ← 子进程：ONNX 推理 + tokenizer / Subprocess: ONNX inference + tokenizer
-├── tokenizer.js          ← BERT WordPiece tokenizer / BERT WordPiece tokenizer
-├── onnx-runtime.js       ← ONNX Runtime 封装 / ONNX Runtime wrapper
-├── worker.js             ← (保留 / reserved)
-├── adapter.js            ← (保留 / reserved)
-├── openclaw.plugin.json  ← 插件清单 / Plugin manifest
-├── package.json          ← 模块配置 / Module config
-└── README.md
+├── README.md
+├── package.json
+│
+├── plugins/
+│   ├── onnx-embed/
+│   │   ├── index.js
+│   │   ├── subprocess.js
+│   │   ├── tokenizer.js
+│   │   ├── onnx-runtime.js
+│   │   └── openclaw.plugin.json
+│   │
+│   └── memory-sync/
+│       ├── index.js
+│       ├── db/
+│       │   ├── memory-db.js
+│       │   ├── migrator.js
+│       │   └── summary-gen.js
+│       ├── hooks/
+│       │   └── inbound.js
+│       └── openclaw.plugin.json
 ```
 
 ---
 
-## 开源协议 / License
+## License
 
 MIT

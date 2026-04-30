@@ -1,0 +1,17 @@
+{
+  "name": "openclaw-onnx-embed",
+  "version": "1.0.0",
+  "description": "OpenClaw ONNX BGE Memory Embedding Provider",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.22"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
