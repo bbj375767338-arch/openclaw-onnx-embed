@@ -178,6 +178,46 @@ Check that `memorySearch.remote.batch.enabled` is `true` in `openclaw.json`.
 
 ---
 
+## 已知问题 / Known Issues
+
+### OpenClaw 4.27 sqlite-vec 向量搜索问题
+
+**问题描述**: 在 OpenClaw 4.27 版本中，如果使用内置 `memory-core` 插件的向量搜索功能，可能会遇到 `sqlite-vec` 加载失败的问题。
+
+**错误信息**:
+```
+[memory] sqlite-vec unavailable: Cannot find package 'sqlite-vec'
+imported from .../engine-storage-*.js
+Did you mean to import "sqlite-vec/index.cjs"?
+Vector: unavailable
+```
+
+**原因**: OpenClaw 4.27 修改了 bundled runtime dependencies 的管理方式，导致 `sqlite-vec` 包没有被正确包含在 plugin runtime deps 快照中。这是一个 OpenClaw 核心问题，不影响本插件的 embedding 功能，但会影响 memory-core 的向量搜索。
+
+**临时解决方案**:
+```bash
+# 找到 plugin-runtime-deps 目录
+RUNTIME_DEPS_DIR="$HOME/.openclaw/plugin-runtime-deps/openclaw-2026.4.27-*/node_modules"
+
+# 从 OpenClaw 全局安装创建符号链接
+ln -sf /path/to/openclaw/node_modules/sqlite-vec "$RUNTIME_DEPS_DIR/sqlite-vec"
+
+# 重启 OpenClaw gateway
+systemctl restart openclaw-gateway
+```
+
+**验证修复**:
+```bash
+openclaw memory status
+# 应该显示 Vector: ready
+```
+
+**官方修复**:
+- 相关 Issue: [openclaw#74692](https://github.com/openclaw/openclaw/issues/74692)
+- 修复 PR: [openclaw#74711](https://github.com/openclaw/openclaw/pull/74711)
+
+---
+
 ## 文件结构 / Files
 
 ```
