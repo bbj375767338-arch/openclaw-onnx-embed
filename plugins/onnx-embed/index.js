@@ -27,6 +27,7 @@ let subprocessPid = null;
 let pending = new Map();
 let idCounter = 0;
 let initPromise = null;
+let initTimeout = null;
 
 function isSubprocessAlive() {
   if (!subprocess || !subprocessPid) return false;
@@ -42,6 +43,10 @@ function resetSubprocess() {
   subprocess = null;
   subprocessPid = null;
   initPromise = null;
+  if (initTimeout) {
+    clearTimeout(initTimeout);
+    initTimeout = null;
+  }
   for (const [id, { resolve, reject }] of pending) {
     reject(new Error('Subprocess restarted'));
   }
@@ -49,13 +54,14 @@ function resetSubprocess() {
 }
 
 function initSubprocess() {
-  if (initPromise && isSubprocessAlive()) {
-    return initPromise;
-  }
-  if (subprocess && !isSubprocessAlive()) {
+  if (initPromise) {
+    if (isSubprocessAlive()) {
+      return initPromise;
+    }
     resetSubprocess();
   }
-  if (initPromise) return initPromise;
+  // initPromise is now guaranteed to be null
+  // (either it was already null, or we just reset it)
 
   console.log('[onnx-bge] Starting ONNX subprocess...');
   initPromise = new Promise((resolve, reject) => {
@@ -78,12 +84,23 @@ function initSubprocess() {
           const msg = JSON.parse(line);
           if (msg.type === 'ready') {
             console.log('[onnx-bge] Subprocess ready!');
+            if (initTimeout) {
+              clearTimeout(initTimeout);
+              initTimeout = null;
+            }
             resolve();
           } else if (msg.type === 'embedding') {
             const { id, result } = msg;
             const p = pending.get(id);
             if (p) {
               p.resolve(result);
+              pending.delete(id);
+            }
+          } else if (msg.type === 'embed_batch_result') {
+            const { id, results } = msg;
+            const p = pending.get(id);
+            if (p) {
+              p.resolve(results);
               pending.delete(id);
             }
           } else if (msg.type === 'error') {
@@ -116,17 +133,15 @@ function initSubprocess() {
       resetSubprocess();
     });
 
-    const timeout = setTimeout(() => {
+    initTimeout = setTimeout(() => {
       if (!subprocess || subprocess.exitCode !== null) {
         return;
       }
-      console.error('[onnx-bge] Subprocess init timed out after 90s');
+      console.error('[onnx-bge] Subprocess init timed out after 300s');
       subprocess.kill();
       resetSubprocess();
       reject(new Error('Subprocess initialization timed out'));
-    }, 90000);
-
-    subprocess.once('ready', () => clearTimeout(timeout));
+    }, 300000);
   });
 
   return initPromise;
@@ -164,6 +179,30 @@ async function embedInSubprocess(text) {
   });
 }
 
+async function embedInSubprocessBatch(texts) {
+  await initSubprocess();
+
+  return new Promise((resolve, reject) => {
+    const id = ++idCounter;
+    pending.set(id, { resolve, reject });
+
+    if (!sendToSubprocess({ type: 'embed_batch', id, texts })) {
+      pending.delete(id);
+      reject(new Error('Subprocess died during batch embedding'));
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      if (pending.has(id)) {
+        pending.delete(id);
+        reject(new Error('Batch embedding timed out after 300s'));
+      }
+    }, 300000);
+
+    pending.get(id)?.ref?.();
+  });
+}
+
 // ============================================================
 // Adapter
 // ============================================================
@@ -186,10 +225,14 @@ const onnxBgeMemoryEmbeddingProviderAdapter = {
       },
 
       embedBatch: async (texts) => {
-        // Serial processing to prevent queue overflow in subprocess
+        if (!texts.length) return [];
+        // Limit batch size to prevent memory explosion in subprocess
+        const BATCH_SIZE = 32;
         const results = [];
-        for (const text of texts) {
-          results.push(await embedInSubprocess(text));
+        for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+          const batch = texts.slice(i, i + BATCH_SIZE);
+          const batchResults = await embedInSubprocessBatch(batch);
+          results.push(...batchResults);
         }
         return results;
       }
