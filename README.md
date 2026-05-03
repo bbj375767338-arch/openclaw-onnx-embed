@@ -1,95 +1,69 @@
-# OpenClaw Local Memory Solution
+# openclaw-onnx-embed
 
-**Chinese-Optimized · Fully Local · Efficient Retrieval · Permanent Memory**
-
-A memory plugin for [OpenClaw](https://github.com/openclaw/openclaw) that provides local embedding generation using ONNX BGE model, combined with MySQL for permanent structured storage.
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E%3D2026.4.22-blue)](https://github.com/openclaw/openclaw)
+**OpenClaw 本地向量嵌入插件 — 完全离线，中文语义记忆搜索**
 
 ---
 
-## Features
+## ✨ 特性
 
-### `openclaw-onnx-embed` — Local Embedding Provider
-
-- 🧠 **Fully Offline** — Generate embeddings locally without any API calls
-- 🔒 **Process Isolation** — ONNX runtime runs in an isolated subprocess
-- 🌐 **Chinese Optimized** — Uses BGE large Chinese model (bge-large-zh-v1.5, 1024 dimensions)
-- 📝 **Standard Tokenizer** — BERT WordPiece tokenizer with 28K vocabulary
-- 🔢 **Auto Threading** — Automatically adjusts threads based on CPU cores
-- 📦 **Batch Indexing** — Supports batch embedding for memory-core plugin
-
-### `openclaw-memory-sync` — MySQL Memory Sync
-
-- 💾 **MySQL Persistence** — Structured storage, permanent retention
-- 🔄 **Memory Evolution** — Supports expanding (evolving) and deprecating (superseded) memories
-- 📊 **Multi-tier Summaries** — L0 (~100 tokens), L1 (~1K tokens) incremental summaries
-- 🔍 **Hybrid Search** — Vector + keyword + time-weighted re-ranking
-- 🔗 **Topic Graph** — Topic and link graph support for memory organization
-- ⚡ **Idempotent Migration** — Migrates existing OpenClaw memories without duplicates
+- 🧠 **完全离线** — 本地计算向量，零外部依赖，无需 API Key
+- 🔒 **进程隔离** — ONNX 模型运行在独立子进程，不阻塞 Gateway
+- ⚡ **开箱即用** — 装好后无需任何配置，Gateway 重启自动加载模型
+- 🌐 **中文优化** — 基于 `bge-large-zh-v1.5`（1024维），中文语义理解能力强
 
 ---
 
-## Architecture
+## 📊 性能
+
+| 指标 | 数值 |
+|------|------|
+| 推理速度 | ~1.4秒/次（2核CPU） |
+| 内存占用 | ~1.5GB（模型+运行时） |
+| 向量维度 | 1024 |
+| 模型大小 | 1.3GB |
+
+---
+
+## 🏗 架构
 
 ```
-OpenClaw Agent
+OpenClaw Gateway
     │
-    ├── openclaw-onnx-embed
-    │       └── bge-large-zh-v1.5 ONNX (1024dim) ← fully offline, Chinese-optimized
-    │
-    └── openclaw-memory-sync
-            ├── memory_recall    ← context-aware memory retrieval
-            ├── memory_search    ← BM25 + vector hybrid search
-            ├── memory_save      ← save memories with evolution tracking
-            └── memory_stats     ← memory system statistics
+    └── memory-core（官方记忆插件）
+            │
+            └── openclaw-onnx-embed（onnx-bge-local provider）
                     │
-                    └── MySQL (openclaw_memory)
-                            ├── memories          ← raw memories + version chain
-                            ├── summaries         ← L0/L1 summaries
-                            └── memory_topics     ← topic graph
+                    └── subprocess.js（Node.js 子进程）
+                            │
+                            └── ONNX Runtime + bge-large-zh-v1.5
 ```
 
 ---
 
-## Requirements
+## 📦 安装
 
-- OpenClaw >= 2026.4.22
-- Node.js >= 18
-- MySQL >= 5.7 (or Docker)
-- ~2GB RAM (embedding model + runtime)
-
----
-
-## Quick Start
-
-### 1. Install Plugins
+### 方式一：ClawHub（推荐）
 
 ```bash
-openclaw plugins install openclaw-onnx-embed
-openclaw plugins install openclaw-memory-sync
+openclaw extension install openclaw-onnx-embed
 ```
 
-Or manual installation:
+### 方式二：手动安装
 
 ```bash
 git clone https://github.com/bbj375767338-arch/openclaw-onnx-embed.git \
-  ~/.openclaw/extensions/openclaw-local-memory
+  ~/.openclaw/extensions/openclaw-onnx-embed
 ```
 
-### 2. Set Up MySQL Database
+---
 
-```bash
-mysql -u root -p
+## ⚙️ 配置
 
-CREATE DATABASE openclaw_memory;
-CREATE USER 'openclaw'@'localhost' IDENTIFIED BY 'your_password';
-GRANT ALL PRIVILEGES ON openclaw_memory.* TO 'openclaw'@'localhost';
-FLUSH PRIVILEGES;
-```
+**装完即用，无需任何配置。** 
 
-### 3. Configure `openclaw.json`
+插件启用后会以 `onnx-bge-local` 作为 `memorySearch` 的 provider 自动被 memory-core 调用。
+
+如需手动指定，在 `openclaw.json` 中添加：
 
 ```json
 {
@@ -97,88 +71,69 @@ FLUSH PRIVILEGES;
     "entries": {
       "openclaw-onnx-embed": {
         "enabled": true
-      },
-      "openclaw-memory-sync": {
-        "enabled": true
       }
-    },
-    "allow": [
-      "openclaw-onnx-embed",
-      "openclaw-memory-sync"
-    ]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "provider": "onnx-bge-local"
+      }
+    }
   }
 }
 ```
 
-### 4. Configure Database Connection
+---
 
-Create `db/config.js` in the plugin directory or set environment variables:
+## 🔧 环境要求
 
-```javascript
-// ~/.openclaw/extensions/openclaw-local-memory/plugins/memory-sync/db/config.js
-module.exports = {
-  host: 'localhost',
-  user: 'openclaw',
-  password: 'your_password',
-  database: 'openclaw_memory'
-};
+- OpenClaw >= 2026.4.22
+- Node.js >= 18
+- 约 2GB 可用内存
+
+**问：需要 GPU 吗？**  
+不需要，纯 CPU 推理。
+
+**问：和 Ollama 比有什么优势？**  
+这个插件是进程内直接加载 ONNX Runtime，适合 OpenClaw 集成场景，启动更快、依赖更少。
+
+---
+
+## 🐛 故障排查
+
+### "Subprocess initialization timed out"
+模型首次加载需要 15~20 秒，请耐心等待。如果经常被 OOM Kill，请确保机器有足够内存。
+
+### "Unknown memory embedding provider: onnx-bge-local"
+确保插件在 `plugins.entries` 中（不只是 `plugins.allow`），然后重启 Gateway。
+
+### 首次查询较慢
+Gateway 重启后首次查询需要重新加载模型，属于正常现象。
+
+---
+
+## 📁 文件结构
+
+```
+openclaw-onnx-embed/
+├── index.js              # 插件入口
+├── subprocess.js         # 子进程：ONNX 推理
+├── openclaw.plugin.json  # 插件清单
+└── package.json
 ```
 
-### 5. Run Migration
+---
 
-```bash
-node plugins/memory-sync/db/migrator.js
-```
+## 📌 更新日志
+
+### v1.0.0 (2026-04-30)
+- 首发版本
+- 支持 `bge-large-zh-v1.5` ONNX 模型
+- 进程内自动初始化
 
 ---
 
-## Agent Tools
+## 📄 License
 
-| Tool | Description |
-|------|-------------|
-| `memory_recall` | Retrieve relevant memories before tasks |
-| `memory_search` | BM25 + vector hybrid search |
-| `memory_save` | Save task results to memory |
-| `memory_stats` | View memory system statistics |
-
----
-
-## How It Works
-
-### Embedding Generation
-
-The `onnx-bge-local` provider generates 1024-dimensional embeddings using the BGE large Chinese model. It runs entirely in a subprocess, isolated from the main OpenClaw process. The model and tokenizer are bundled with the plugin — no external API calls.
-
-### Memory Search
-
-When you call `memory_search`, the system:
-
-1. Generates an embedding for your query
-2. Performs ANN vector search to find similar memories
-3. Applies BM25 keyword matching
-4. Re-ranks results using time权重 (recency weighting)
-5. Returns top-k results with relevance scores
-
-### Memory Evolution
-
-Memories can evolve over time. When a new memory supersedes an old one, the old memory is marked as `superseded` rather than deleted, preserving the version chain for auditability.
-
----
-
-## Performance
-
-- **Embedding speed**: ~1.4s per query (1024 dimensions, 2-core CPU)
-- **Batch indexing**: Supports up to 40+ chunks per batch with 180s timeout
-- **Storage**: MySQL with proper indexing for sub-second retrieval
-
----
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
----
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
+MIT
