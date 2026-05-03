@@ -87,6 +87,60 @@ async function embedText(text) {
   return sanitizeAndNormalizeEmbedding(Array.from(embedding));
 }
 
+async function embedBatch(texts) {
+  const tok = loadTokenizer();
+  const allInputIds = texts.map(t => tok.encode(String(t).slice(0, 2048), null, { add_special_tokens: true }));
+
+  const t0 = Date.now();
+  const batchSize = allInputIds.length;
+  const batchInputIds = new BigInt64Array(batchSize * SEQ_LEN);
+  const batchMask = new BigInt64Array(batchSize * SEQ_LEN);
+  const batchType = new BigInt64Array(batchSize * SEQ_LEN);
+
+  for (let b = 0; b < batchSize; b++) {
+    const inputIds = allInputIds[b];
+    const contentLen = Math.min(inputIds.length, SEQ_LEN);
+    for (let i = 0; i < contentLen; i++) {
+      batchInputIds[b * SEQ_LEN + i] = BigInt(inputIds[i]);
+      batchMask[b * SEQ_LEN + i] = 1n;
+    }
+    for (let i = contentLen; i < SEQ_LEN; i++) {
+      batchInputIds[b * SEQ_LEN + i] = BigInt(padId);
+      batchMask[b * SEQ_LEN + i] = 0n;
+    }
+  }
+
+  const inputTensor = new ort.Tensor('int64', batchInputIds, [batchSize, SEQ_LEN]);
+  const maskTensor = new ort.Tensor('int64', batchMask, [batchSize, SEQ_LEN]);
+  const typeTensor = new ort.Tensor('int64', batchType, [batchSize, SEQ_LEN]);
+
+  const results = await session.run({
+    'input_ids': inputTensor,
+    'attention_mask': maskTensor,
+    'token_type_ids': typeTensor
+  });
+
+  const elapsed = Date.now() - t0;
+  console.error('[onnx-sub] batch done in ' + elapsed + 'ms, batch=' + batchSize);
+
+  const output = results['last_hidden_state'];
+  return texts.map((_, b) => {
+    const embedding = new Float32Array(HIDDEN_SIZE);
+    let count = 0;
+    const inputIds = allInputIds[b];
+    for (let i = 0; i < Math.min(inputIds.length, SEQ_LEN); i++) {
+      count++;
+      for (let j = 0; j < HIDDEN_SIZE; j++) {
+        embedding[j] += output.data[b * SEQ_LEN * HIDDEN_SIZE + i * HIDDEN_SIZE + j];
+      }
+    }
+    if (count > 0) {
+      for (let j = 0; j < HIDDEN_SIZE; j++) embedding[j] /= count;
+    }
+    return sanitizeAndNormalizeEmbedding(Array.from(embedding));
+  });
+}
+
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n');
 }
@@ -151,6 +205,14 @@ async function handleMessage(msg) {
       send({ type: 'embedding', id: msg.id, result });
     } catch (e) {
       console.error('[onnx-sub] embed error:', e.message);
+      send({ type: 'error', id: msg.id, error: e.message });
+    }
+  } else if (msg.type === 'embed_batch') {
+    try {
+      const results = await embedBatch(msg.texts);
+      send({ type: 'embed_batch_result', id: msg.id, results });
+    } catch (e) {
+      console.error('[onnx-sub] batch error:', e.message);
       send({ type: 'error', id: msg.id, error: e.message });
     }
   } else if (msg.type === 'ping') {
